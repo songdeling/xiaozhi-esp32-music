@@ -8,6 +8,7 @@
 #include "font_awesome_symbols.h"
 #include "assets/lang_config.h"
 #include "mcp_server.h"
+#include "settings.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -70,6 +71,13 @@ Application::~Application()
 
 void Application::CheckNewVersion(Ota &ota)
 {
+    // Check if auto update is disabled
+    Settings settings("system", false);
+    int32_t auto_update_disabled_value = settings.GetInt("auto_update_disabled", 0);
+    bool auto_update_disabled = auto_update_disabled_value != 0;
+    
+    ESP_LOGI(TAG, "Auto update check: disabled=%d (value=%d)", auto_update_disabled, auto_update_disabled_value);
+
     const int MAX_RETRY = 10;
     int retry_count = 0;
     int retry_delay = 10; // 初始重试延迟为10秒
@@ -79,7 +87,12 @@ void Application::CheckNewVersion(Ota &ota)
     {
         SetDeviceState(kDeviceStateActivating);
         auto display = board.GetDisplay();
-        display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
+        if (auto_update_disabled) {
+            display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
+            ESP_LOGI(TAG, "Auto update is disabled, but still checking server config");
+        } else {
+            display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
+        }
 
         if (!ota.CheckVersion())
         {
@@ -109,7 +122,14 @@ void Application::CheckNewVersion(Ota &ota)
         retry_count = 0;
         retry_delay = 10; // 重置重试延迟时间
 
-        if (ota.HasNewVersion())
+        // Only check for new version and upgrade if auto update is not disabled
+        if (auto_update_disabled) {
+            ESP_LOGI(TAG, "Auto update is disabled, skipping upgrade check");
+            // Still process activation and other configs, but skip upgrade
+            // Mark current version as valid and continue to activation processing
+            ota.MarkCurrentVersionValid();
+            // Fall through to activation code processing below
+        } else if (ota.HasNewVersion())
         {
             Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
 

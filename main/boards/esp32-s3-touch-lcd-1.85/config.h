@@ -58,6 +58,16 @@
 #define DISPLAY_BACKLIGHT_PIN           QSPI_PIN_NUM_LCD_BL
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 
+// 电池检测引脚配置
+// 电池电压检测ADC引脚 (ESP32-S3 ADC1_CHANNEL_5对应GPIO8)
+#define BATTERY_ADC_PIN                 GPIO_NUM_8
+// 充电状态检测引脚 (如果没有充电检测功能，可以设置为GPIO_NUM_NC)
+#define BATTERY_CHARGING_PIN            GPIO_NUM_9
+// 电池电压分压电阻配置 (单位: 欧姆)
+// 如果使用两个100kΩ电阻分压，则upper_resistor=100000, lower_resistor=100000
+#define BATTERY_UPPER_RESISTOR          100000.0f
+#define BATTERY_LOWER_RESISTOR          100000.0f
+
 #define TAIJIPI_ST77916_PANEL_BUS_QSPI_CONFIG(sclk, d0, d1, d2, d3, max_trans_sz) \
     {                                                                             \
         .data0_io_num = d0,                                                       \

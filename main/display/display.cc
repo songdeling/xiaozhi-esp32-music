@@ -112,29 +112,68 @@ void Display::UpdateStatusBar(bool update_all) {
         }
     }
 
-    // Update time
+    esp_pm_lock_acquire(pm_lock_);
+    // 获取电池电量信息（用于图标和状态栏显示）
+    int battery_level;
+    bool charging, discharging;
+    bool has_battery = board.GetBatteryLevel(battery_level, charging, discharging);
+    
+    // 静态变量用于跟踪上次显示的电池电量和充电状态，以便在变化时及时更新
+    static int last_displayed_battery_level = -1;
+    static bool last_displayed_charging = false;
+    bool battery_changed = has_battery && (battery_level != last_displayed_battery_level);
+    bool charging_changed = has_battery && (charging != last_displayed_charging);
+    
+    // Update time and battery level
     if (app.GetDeviceState() == kDeviceStateIdle) {
-        if (last_status_update_time_ + std::chrono::seconds(10) < std::chrono::system_clock::now()) {
+        bool should_update_time = last_status_update_time_ + std::chrono::seconds(10) < std::chrono::system_clock::now();
+        // 如果时间需要更新，或者电池电量/充电状态发生变化，则更新状态栏
+        if (should_update_time || battery_changed || charging_changed) {
             // Set status to clock "HH:MM"
             time_t now = time(NULL);
             struct tm* tm = localtime(&now);
             // Check if the we have already set the time
             if (tm->tm_year >= 2025 - 1900) {
-                char time_str[16];
-                strftime(time_str, sizeof(time_str), "%H:%M  ", tm);
+                char time_str[32];
+                
+                // 获取电池电量并添加到时间显示中
+                if (has_battery) {
+                    // 判断充电状态：充电中、充电完成（100%且不充电）、正常放电
+                    if (charging) {
+                        // 充电中：显示 "14:30  |  85% ⚡"
+                        snprintf(time_str, sizeof(time_str), "%02d:%02d  |  %d%% ⚡", 
+                                tm->tm_hour, tm->tm_min, battery_level);
+                    } else if (battery_level >= 100) {
+                        // 充电完成：显示 "14:30  |  100% ✓"
+                        snprintf(time_str, sizeof(time_str), "%02d:%02d  |  %d%% ✓", 
+                                tm->tm_hour, tm->tm_min, battery_level);
+                    } else {
+                        // 正常放电：显示 "14:30  |  85%"
+                        snprintf(time_str, sizeof(time_str), "%02d:%02d  |  %d%%", 
+                                tm->tm_hour, tm->tm_min, battery_level);
+                    }
+                    last_displayed_battery_level = battery_level;
+                    last_displayed_charging = charging;
+                } else {
+                    // 如果没有电池信息，只显示时间
+                    strftime(time_str, sizeof(time_str), "%H:%M  ", tm);
+                    last_displayed_battery_level = -1;
+                    last_displayed_charging = false;
+                }
                 SetStatus(time_str);
             } else {
                 ESP_LOGW(TAG, "System time is not set, tm_year: %d", tm->tm_year);
             }
         }
+    } else {
+        // 非idle状态时，重置电池电量跟踪
+        last_displayed_battery_level = -1;
+        last_displayed_charging = false;
     }
 
-    esp_pm_lock_acquire(pm_lock_);
     // 更新电池图标
-    int battery_level;
-    bool charging, discharging;
     const char* icon = nullptr;
-    if (board.GetBatteryLevel(battery_level, charging, discharging)) {
+    if (has_battery) {
         if (charging) {
             icon = FONT_AWESOME_BATTERY_CHARGING;
         } else {
@@ -166,6 +205,13 @@ void Display::UpdateStatusBar(bool update_all) {
                     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
                 }
             }
+        }
+    } else {
+        // 如果没有电池信息，确保电池图标为空
+        DisplayLockGuard lock(this);
+        if (battery_label_ != nullptr && battery_icon_ != nullptr) {
+            battery_icon_ = nullptr;
+            lv_label_set_text(battery_label_, "");
         }
     }
 

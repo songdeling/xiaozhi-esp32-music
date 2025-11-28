@@ -5,8 +5,11 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "settings.h"
+#include "adc_battery_monitor.h"
 
 #include <esp_log.h>
+#include <nvs.h>
 #include "i2c_device.h"
 #include <driver/i2c_master.h>
 #include <driver/ledc.h>
@@ -221,6 +224,7 @@ private:
     button_handle_t boot_btn, pwr_btn;
     button_driver_t* boot_btn_driver_ = nullptr;
     button_driver_t* pwr_btn_driver_ = nullptr;
+    AdcBatteryMonitor* adc_battery_monitor_ = nullptr;
     static CustomBoard* instance_;
 
 
@@ -366,6 +370,22 @@ private:
                                     });
     }
  
+    void InitializeBatteryMonitor() {
+        // 初始化电池电量监测
+        // 使用ADC1_CHANNEL_7 (对应GPIO8) 检测电池电压
+        // 使用分压电路：两个100kΩ电阻
+        // 注意：ESP32-S3的ADC通道映射：GPIO8 = ADC1_CHANNEL_7
+        adc_battery_monitor_ = new AdcBatteryMonitor(
+            ADC_UNIT_1, 
+            ADC_CHANNEL_7,  // GPIO8对应ADC1_CHANNEL_7
+            BATTERY_UPPER_RESISTOR, 
+            BATTERY_LOWER_RESISTOR, 
+            BATTERY_CHARGING_PIN
+        );
+        ESP_LOGI(TAG, "Battery monitor initialized (ADC: GPIO%d/CH%d, Charging: GPIO%d)", 
+                 BATTERY_ADC_PIN, ADC_CHANNEL_7, BATTERY_CHARGING_PIN);
+    }
+
     void InitializeButtonsCustom() {
         gpio_reset_pin(BOOT_BUTTON_GPIO);                                     
         gpio_set_direction(BOOT_BUTTON_GPIO, GPIO_MODE_INPUT);   
@@ -430,8 +450,37 @@ public:
         InitializeTca9554();
         InitializeSpi();
         Initializest77916Display();
+        InitializeBatteryMonitor();
         InitializeButtons();
         GetBacklight()->RestoreBrightness();
+        
+        // Disable auto update by default (after display is initialized)
+        // Delay Settings initialization to ensure display works first
+        vTaskDelay(pdMS_TO_TICKS(100));  // Small delay to ensure display is stable
+        
+        // Force set auto update disabled for this board
+        nvs_handle_t nvs_handle;
+        esp_err_t nvs_ret = nvs_open("system", NVS_READWRITE, &nvs_handle);
+        if (nvs_ret == ESP_OK) {
+            // Always set to 1 (disabled) for this board, regardless of current value
+            esp_err_t set_ret = nvs_set_i32(nvs_handle, "auto_update_disabled", 1);
+            if (set_ret == ESP_OK) {
+                esp_err_t commit_ret = nvs_commit(nvs_handle);
+                if (commit_ret == ESP_OK) {
+                    // Verify the value was set correctly
+                    int32_t verify_value = 0;
+                    nvs_get_i32(nvs_handle, "auto_update_disabled", &verify_value);
+                    ESP_LOGI(TAG, "Auto update disabled by default (verified: %d)", verify_value);
+                } else {
+                    ESP_LOGE(TAG, "Failed to commit auto_update_disabled: %s", esp_err_to_name(commit_ret));
+                }
+            } else {
+                ESP_LOGE(TAG, "Failed to set auto_update_disabled: %s", esp_err_to_name(set_ret));
+            }
+            nvs_close(nvs_handle);
+        } else {
+            ESP_LOGE(TAG, "Failed to open NVS for auto_update_disabled setting: %s", esp_err_to_name(nvs_ret));
+        }
     }
 
     virtual AudioCodec* GetAudioCodec() override {
@@ -448,6 +497,16 @@ public:
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
+    }
+
+    virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging) override {
+        if (adc_battery_monitor_ == nullptr) {
+            return false;
+        }
+        charging = adc_battery_monitor_->IsCharging();
+        discharging = adc_battery_monitor_->IsDischarging();
+        level = adc_battery_monitor_->GetBatteryLevel();
+        return true;
     }
 };
 

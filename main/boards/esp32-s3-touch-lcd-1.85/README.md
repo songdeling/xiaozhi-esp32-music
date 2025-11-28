@@ -19,6 +19,11 @@ https://docs.espressif.com/projects/esp-idf/zh_CN/latest/esp32s3/get-started/lin
 
 ### 编译步骤
 
+.\setup_idf_env.ps1; python "$env:IDF_PATH\tools\idf.py" build
+
+
+$env:IDF_PATH = "C:\Espressif\frameworks\esp-idf-v5.5.1"; $env:PATH = "C:\Espressif\python_env\idf5.5_py3.11_env\Scripts;C:\Espressif\tools\cmake\3.30.2\bin;C:\Espressif\tools\ninja\1.12.1;C:\Espressif\tools\xtensa-esp-elf\esp-14.2.0_20241119\xtensa-esp-elf\bin;$env:PATH"; python -m esptool --chip esp32s3 merge_bin -o build\merged_firmware.bin -f raw --fill-flash-size 16MB 0x0 build\bootloader\bootloader.bin 0x8000 build\partition_table\partition-table.bin 0xd000 build\ota_data_initial.bin 0x10000 build\srmodels\srmodels.bin 0x100000 build\xiaozhi.bin
+
 **1. 设置编译目标为 ESP32S3：**
 
 ```bash

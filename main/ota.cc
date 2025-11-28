@@ -143,15 +143,35 @@ bool Ota::CheckVersion() {
     cJSON *mqtt = cJSON_GetObjectItem(root, "mqtt");
     if (cJSON_IsObject(mqtt)) {
         Settings settings("mqtt", true);
+        // Check if config is locked (user has manually configured)
+        // Default to 0 (unlocked) for first-time setup, allow server config
+        bool config_locked = settings.GetInt("config_locked", 0) != 0;
+        
         cJSON *item = NULL;
         cJSON_ArrayForEach(item, mqtt) {
             if (cJSON_IsString(item)) {
-                if (settings.GetString(item->string) != item->valuestring) {
+                std::string current_value = settings.GetString(item->string);
+                // Update if:
+                // 1. Config is not locked, OR
+                // 2. Local config is empty (first time setup)
+                // AND server value is different
+                if ((!config_locked || current_value.empty()) && (current_value.empty() || current_value != item->valuestring)) {
+                    ESP_LOGI(TAG, "Updating MQTT config: %s = %s (was: %s, locked: %d)", item->string, item->valuestring, current_value.empty() ? "<empty>" : current_value.c_str(), config_locked);
                     settings.SetString(item->string, item->valuestring);
+                } else if (config_locked && !current_value.empty()) {
+                    ESP_LOGD(TAG, "MQTT config %s is locked, keeping local value", item->string);
                 }
             } else if (cJSON_IsNumber(item)) {
-                if (settings.GetInt(item->string) != item->valueint) {
+                int32_t current_value = settings.GetInt(item->string, -1);
+                // Update if:
+                // 1. Config is not locked, OR
+                // 2. Local config is not set (-1, first time setup)
+                // AND server value is different
+                if ((!config_locked || current_value == -1) && (current_value == -1 || current_value != item->valueint)) {
+                    ESP_LOGI(TAG, "Updating MQTT config: %s = %d (was: %d, locked: %d)", item->string, item->valueint, current_value, config_locked);
                     settings.SetInt(item->string, item->valueint);
+                } else if (config_locked && current_value != -1) {
+                    ESP_LOGD(TAG, "MQTT config %s is locked, keeping local value", item->string);
                 }
             }
         }
@@ -164,15 +184,35 @@ bool Ota::CheckVersion() {
     cJSON *websocket = cJSON_GetObjectItem(root, "websocket");
     if (cJSON_IsObject(websocket)) {
         Settings settings("websocket", true);
+        // Check if config is locked (user has manually configured)
+        // Default to 0 (unlocked) for first-time setup, allow server config
+        bool config_locked = settings.GetInt("config_locked", 0) != 0;
+        
         cJSON *item = NULL;
         cJSON_ArrayForEach(item, websocket) {
             if (cJSON_IsString(item)) {
-                if (settings.GetString(item->string) != item->valuestring) {
+                std::string current_value = settings.GetString(item->string);
+                // Update if:
+                // 1. Config is not locked, OR
+                // 2. Local config is empty (first time setup)
+                // AND server value is different
+                if ((!config_locked || current_value.empty()) && (current_value.empty() || current_value != item->valuestring)) {
+                    ESP_LOGI(TAG, "Updating WebSocket config: %s = %s (was: %s, locked: %d)", item->string, item->valuestring, current_value.empty() ? "<empty>" : current_value.c_str(), config_locked);
                     settings.SetString(item->string, item->valuestring);
+                } else if (config_locked && !current_value.empty()) {
+                    ESP_LOGD(TAG, "WebSocket config %s is locked, keeping local value", item->string);
                 }
             } else if (cJSON_IsNumber(item)) {
-                if (settings.GetInt(item->string) != item->valueint) {
+                int32_t current_value = settings.GetInt(item->string, -1);
+                // Update if:
+                // 1. Config is not locked, OR
+                // 2. Local config is not set (-1, first time setup)
+                // AND server value is different
+                if ((!config_locked || current_value == -1) && (current_value == -1 || current_value != item->valueint)) {
+                    ESP_LOGI(TAG, "Updating WebSocket config: %s = %d (was: %d, locked: %d)", item->string, item->valueint, current_value, config_locked);
                     settings.SetInt(item->string, item->valueint);
+                } else if (config_locked && current_value != -1) {
+                    ESP_LOGD(TAG, "WebSocket config %s is locked, keeping local value", item->string);
                 }
             }
         }
@@ -206,30 +246,55 @@ bool Ota::CheckVersion() {
         ESP_LOGW(TAG, "No server_time section found!");
     }
 
+    // Protect display and wifi configurations from being overwritten
+    // These configurations should only be set locally, not from server
+    cJSON *display = cJSON_GetObjectItem(root, "display");
+    if (cJSON_IsObject(display)) {
+        ESP_LOGW(TAG, "Server returned display config, but it will be ignored to protect local settings");
+        // Do not process display config - it should only be set locally
+    }
+    
+    cJSON *wifi = cJSON_GetObjectItem(root, "wifi");
+    if (cJSON_IsObject(wifi)) {
+        ESP_LOGW(TAG, "Server returned wifi config, but it will be ignored to protect local settings");
+        // Do not process wifi config - it should only be set locally
+    }
+
     has_new_version_ = false;
+    
+    // Check if auto update is disabled before checking for new version
+    Settings settings("system", false);
+    int32_t auto_update_disabled_value = settings.GetInt("auto_update_disabled", 1);
+    bool auto_update_disabled = auto_update_disabled_value != 0;
+    
     cJSON *firmware = cJSON_GetObjectItem(root, "firmware");
     if (cJSON_IsObject(firmware)) {
-        cJSON *version = cJSON_GetObjectItem(firmware, "version");
-        if (cJSON_IsString(version)) {
-            firmware_version_ = version->valuestring;
-        }
-        cJSON *url = cJSON_GetObjectItem(firmware, "url");
-        if (cJSON_IsString(url)) {
-            firmware_url_ = url->valuestring;
-        }
-
-        if (cJSON_IsString(version) && cJSON_IsString(url)) {
-            // Check if the version is newer, for example, 0.1.0 is newer than 0.0.1
-            has_new_version_ = IsNewVersionAvailable(current_version_, firmware_version_);
-            if (has_new_version_) {
-                ESP_LOGI(TAG, "New version available: %s", firmware_version_.c_str());
-            } else {
-                ESP_LOGI(TAG, "Current is the latest version");
+        if (auto_update_disabled) {
+            ESP_LOGI(TAG, "Auto update is disabled (value=%d), skipping version comparison", auto_update_disabled_value);
+            // Don't set has_new_version_ to true, even if server says there's a new version
+        } else {
+            cJSON *version = cJSON_GetObjectItem(firmware, "version");
+            if (cJSON_IsString(version)) {
+                firmware_version_ = version->valuestring;
             }
-            // If the force flag is set to 1, the given version is forced to be installed
-            cJSON *force = cJSON_GetObjectItem(firmware, "force");
-            if (cJSON_IsNumber(force) && force->valueint == 1) {
-                has_new_version_ = true;
+            cJSON *url = cJSON_GetObjectItem(firmware, "url");
+            if (cJSON_IsString(url)) {
+                firmware_url_ = url->valuestring;
+            }
+
+            if (cJSON_IsString(version) && cJSON_IsString(url)) {
+                // Check if the version is newer, for example, 0.1.0 is newer than 0.0.1
+                has_new_version_ = IsNewVersionAvailable(current_version_, firmware_version_);
+                if (has_new_version_) {
+                    ESP_LOGI(TAG, "New version available: %s", firmware_version_.c_str());
+                } else {
+                    ESP_LOGI(TAG, "Current is the latest version");
+                }
+                // If the force flag is set to 1, the given version is forced to be installed
+                cJSON *force = cJSON_GetObjectItem(firmware, "force");
+                if (cJSON_IsNumber(force) && force->valueint == 1) {
+                    has_new_version_ = true;
+                }
             }
         }
     } else {
